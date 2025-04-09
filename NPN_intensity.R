@@ -5,8 +5,8 @@ library(rnpn)
 
 npnData<-npn_download_status_data(
                                 request_source="MCButtFace",
-                                years=c(2010:2020),
-                                states = c("AZ","NM"),
+                                years=c(2010:2021),
+                                states = c("AZ"),
                                 additional_fields = c("Observed_Status_Conflict_Flag","Partner_Group"))
 
 # subset only plants
@@ -18,8 +18,8 @@ npnDatasub<-subset(npnDatasub, observed_status_conflict_flag=="-9999")
 npnDatasub$observation_date<-as.Date(npnDatasub$observation_date, format="%Y-%m-%d")
 npnDatasub$year<-as.numeric(format(npnDatasub$observation_date, "%Y"))
 
-save(npnDatasub, file = "NPN_flowering_AZ_NM_2010_2020.RData")
-load("NPN_flowering_AZ_NM_2010_2020.RData")
+save(npnDatasub, file = "NPN_flowering_AZ_2010_2021.RData")
+load("NPN_flowering_AZ_2010_2021.RData")
 
 pPhase<- as.data.frame(table(npnDatasub$phenophase_description)) 
 spp<-as.data.frame(table(npnDatasub$common_name))
@@ -29,7 +29,7 @@ library(sp)
 library(raster)
 xy <- npnDatasub[,c(6,5)]
 
-spNpnData <- SpatialPointsDataFrame(coords = xy, data = npnDatasub,
+spNpnData <- sp::SpatialPointsDataFrame(coords = xy, data = npnDatasub,
                                proj4string = CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"))
 
 # Tucson area -111.361267,-110.529053,31.896168,32.625887
@@ -45,13 +45,22 @@ sppTucson<-as.data.frame(table(npnTucson$common_name))
 
 
 # plot up heat map of single year status 
-temp<-subset(npnTucson, year==2019)
-temp<-subset(npnTucson, common_name=="desert willow") # saguaro, ocotillo, desert zinnia, creosote bush
+temp<-subset(npnTucson, year==2021)
+temp<-subset(npnTucson, common_name=="saguaro") # saguaro, ocotillo, desert zinnia, creosote bush
 temp<-temp[,c("individual_id","phenophase_description","phenophase_status","observation_date")]
 library(ggplot2)
 ggplot(temp, aes(x = observation_date, as.factor(individual_id))) +
         geom_tile(aes(fill = as.factor(phenophase_status)))
 
+
+# DOY of yes~spp
+temp<-subset(npnDatasub, phenophase_status==1)
+ggplot(temp, aes(as.factor(common_name),day_of_year))+
+        geom_boxplot(varwidth = TRUE)
+
+
+test<- npnDatasub %>% group_by(common_name) %>% summarize(medDOY=median(day_of_year),
+                                                          n=n())
 
 # look at all data by spp
 temp<-subset(npnDatasub, common_name=="ocotillo") 
@@ -78,7 +87,8 @@ leaflet(data = sites) %>% addTiles() %>%
 temp<-temp[,c("individual_id","phenophase_description","phenophase_status","observation_date")]
 library(ggplot2)
 ggplot(temp, aes(x = observation_date, as.factor(individual_id))) +
-        geom_tile(aes(fill = as.factor(phenophase_status)))
+        geom_tile(aes(fill = as.factor(phenophase_status)))+
+        scale_fill_manual(values=c("blue","green","red"))
 
 
 # plot of spp counts
@@ -96,7 +106,7 @@ ggplot(sppCts, aes(reorder(common_name,count), count))+
 ##### CLIMATE DATA ##### 
 # get climate data for spp
 library(dplyr)
-temp<-subset(npnDatasub, common_name=="creosote bush") 
+temp<-subset(npnDatasub, common_name=="ocotillo") 
 
 # status yes
 flwr<-subset(temp, phenophase_status==1)
@@ -156,7 +166,6 @@ print(sites$site_id[i])
 # combine to master climate dataframe for climwin
 FullClimData = do.call(rbind, sitelist)
 
-
 # look for climate windows in flwr set
 firstYes<-flwr %>% group_by(individual_id,year) %>%
         summarize(minDOY = min(day_of_year),minDate=min(observation_date))
@@ -169,7 +178,7 @@ for(i in 1:nrow(flwr)){
         dataTemp<-sitelist[which(sites$site_id==flwr$site_id[i])][[1]]
         ##
         event<-which(dataTemp$date==flwr$observation_date[i])
-        dataTemp<-dataTemp[(event-90):event,]
+        dataTemp<-dataTemp[(event-21):event,]
         maxPrecip[[i]]<-dataTemp[which.max(dataTemp$precip),]
         climlist[[i]]<-dataTemp
 }
@@ -185,7 +194,15 @@ hist(maxPrecip$precip,breaks = seq(0,3,0.1))
  
 hist(firstYes$minDOY)
 
-# climwin analysis test
+# phenoR with firstYes
+library(pheno)
+pheno<-firstYes[,c("minDOY","year","individual_id")]
+R <- pheno.flm.fit(pheno)
+R2<- pheno.lad.fit(pheno,limit=1000)
+
+# 
+
+##### climwin analysis test #####
 library(climwin)
 biol<-flwr[,c("individual_id","observation_date","minDOY.x","site_id")]
 clim<-FullClimData[,c("date","t_mean","precip","site_id")]
@@ -207,7 +224,7 @@ plotdelta(dataset = doyOutput)
 plotweights(dataset = doyOutput)
 plotbetas(dataset = doyOutput)
 plotwin(dataset = doyOutput)
-
+#####
 
 # survival analysis test
 library(survival)
@@ -215,6 +232,7 @@ library(survminer)
 
 temp<-subset(npnDatasub, common_name=="creosote bush") 
 temp<-temp[,c("year","day_of_year","phenophase_status","individual_id")]
+temp<-subset(temp, phenophase_status!=-1)
 
 survival_model = survival::survfit(Surv(time = day_of_year, event = phenophase_status, type='right') ~ 1, data = temp)
 model_estimates = summary(survival_model)$table
@@ -227,7 +245,7 @@ ggsurvplot(survival_model, color = "#2E9FDF",
 
 # all status up to first yes
 # get climate data for spp
-temp<-subset(npnDatasub, common_name=="creosote bush") 
+temp<-subset(npnDatasub, common_name=="ocotillo") 
 # status yes
 flwr<-subset(temp, phenophase_status==1)
 
@@ -251,20 +269,66 @@ for(i in 1:nrow(firstYes)){
 }
 firstYesData = do.call(rbind, subList)
 
-firstYesData<-firstYesData[,c("year.x","day_of_year","phenophase_status","individual_id","cumP","cumT","site_id")]
+firstYesData<-firstYesData[,c("observation_date","year.x","day_of_year","phenophase_status","individual_id","cumP","cumT","site_id.x","precip","t_mean")]
+firstYesData<-subset(firstYesData, phenophase_status!=-1)
+firstYesData<-subset(firstYesData, day_of_year<=180)
+
+# look at climate variables from sitelist
+#climlist<-list()
+maxPrecip<-list()
+#cumList<-list()
+for(i in 1:nrow(firstYesData)){
+        dataTemp<-sitelist[which(sites$site_id==firstYesData$site_id.x[i])][[1]]
+        ##
+        event<-which(dataTemp$date==firstYesData$observation_date[i])
+        # get cumulative metrics
+        #cumList[[i]]<-dataTemp[event,]
+        # get max and window
+        dataTemp<-dataTemp[(event-30):event,]
+        dataTemp<-dataTemp[which.max(dataTemp$precip),]
+        dataTemp$eventDate<-firstYesData$observation_date[i]
+        dataTemp$individual_id<-firstYesData$individual_id[i]
+        maxPrecip[[i]]<-dataTemp
+        #climlist[[i]]<-dataTemp
+}
+
+#climData = do.call(rbind, climlist)
+maxPrecip = do.call(rbind, maxPrecip)
+maxPrecip<-maxPrecip[,c("eventDate","precip","individual_id")]
+colnames(maxPrecip)[2]<-"maxPrecip"
+firstYesData$maxPrecip<-maxPrecip$maxPrecip
+#cumData = do.call(rbind, cumList)
+#
 
 #survival_model = survival::survfit(Surv(time = day_of_year, event = phenophase_status, type='right') ~ 1, data = firstYesData)
 #ggsurvplot(survival_model, color = "#2E9FDF",
 #           ggtheme = theme_minimal())
 
+# add climate based factors
+perc.rank<-function(x) trunc(rank(x,ties.method = "average"))/length(x)
+firstYesData$percRank<-perc.rank(firstYesData$cumP)
+        # names
+        firstYesData$PanomName<-"normalP"
+        firstYesData$PanomName[firstYesData$percRank<=0.33] <- "dry"
+        firstYesData$PanomName[firstYesData$percRank>=0.66] <- "wet"
+firstYesData$tempRank<-perc.rank(firstYesData$cumT)
+        # names
+        firstYesData$TanomName<-"normalT"
+        firstYesData$TanomName[firstYesData$tempRank<=0.33] <- "cool"
+        firstYesData$TanomName[firstYesData$tempRank>=0.66] <- "warm"        
+        
 
 library(ggfortify) # https://rviews.rstudio.com/2017/09/25/survival-analysis-with-r/
 # http://www.sthda.com/english/wiki/cox-proportional-hazards-model
-trt_fit <- survfit(Surv(time = day_of_year, event = phenophase_status) ~ year.x, data=firstYesData)
+trt_fit <- survfit(Surv(time = day_of_year, event = phenophase_status) ~ PanomName, data=firstYesData)
 autoplot(trt_fit)
 
-survival_model = survival::coxph(Surv(time = day_of_year, event = phenophase_status) ~ cumP, data = firstYesData)
-summary(survival_model)
+survival_model = survival::coxph(Surv(time = day_of_year, event = phenophase_status) ~ cumT+cumP, data = firstYesData)
+        summary(survival_model)
+ggadjustedcurves(survival_model, data=firstYesData)
+ggforest(survival_model)
+ftest<-cox.zph(survival_model)
+        ggcoxzph(ftest)
 #ggsurvplot(survfit(survival_model), color = "#2E9FDF",
 #          ggtheme = theme_minimal(), data=firstYesData)
 cox_fit <- survfit(survival_model)
@@ -309,3 +373,14 @@ head(vi)
 
 cat("Prediction Error = 1 - Harrell's c-index = ", r_fit$prediction.error)
 ## Prediction Error = 1 - Harrell's c-index =  0.3087233
+
+# logistic regression
+model <- glm( phenophase_status~cumP, data = firstYesData, family = binomial)
+        summary(model)$coef
+
+        
+library(ggplot)
+        ggplot(firstYesData, aes(maxPrecip, phenophase_status)) +
+        geom_point(alpha = 0.2) +
+        geom_smooth(method = "glm", method.args = list(family = "binomial")) 
+
